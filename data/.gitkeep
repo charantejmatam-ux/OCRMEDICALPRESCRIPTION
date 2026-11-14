@@ -1,0 +1,3 @@
+# data/.gitkeep  — keeps the data/ directory tracked by git while its
+# contents remain ignored via .gitignore.
+

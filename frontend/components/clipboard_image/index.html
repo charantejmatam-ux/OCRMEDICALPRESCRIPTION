@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        color: #173042;
+        font: 14px sans-serif;
+      }
+
+      #paste-zone {
+        box-sizing: border-box;
+        min-height: 96px;
+        padding: 18px;
+        border: 1px dashed #91b9b7;
+        border-radius: 12px;
+        background: #f7fbfa;
+        text-align: center;
+        cursor: text;
+      }
+
+      #paste-zone:focus {
+        outline: 2px solid #087f82;
+        outline-offset: 2px;
+      }
+
+      #status {
+        margin-top: 8px;
+        color: #43616b;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="paste-zone" role="textbox" aria-label="Paste prescription image" tabindex="0">
+      Click here, then press Ctrl+V (or Cmd+V) to paste an image.
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+    <script>
+      const maxBytes = 10 * 1024 * 1024;
+      const pasteZone = document.getElementById("paste-zone");
+      const status = document.getElementById("status");
+
+      pasteZone.addEventListener("paste", (event) => {
+        const items = Array.from(event.clipboardData?.items || []);
+        const imageItem = items.find((item) => item.type.startsWith("image/"));
+        if (!imageItem) {
+          status.textContent = "No image found in the clipboard.";
+          return;
+        }
+
+        const file = imageItem.getAsFile();
+        if (!file || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+          status.textContent = "Paste a PNG, JPG, or WEBP image.";
+          return;
+        }
+        if (file.size > maxBytes) {
+          status.textContent = "The pasted image exceeds the 10 MB limit.";
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = String(reader.result || "");
+          const base64 = dataUrl.split(",", 2)[1];
+          if (!base64) {
+            status.textContent = "Could not read the pasted image.";
+            return;
+          }
+          status.textContent = "Image pasted. Review it in the app before running OCR.";
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setComponentValue",
+              value: { mime_type: file.type, base64: base64 },
+              dataType: "json",
+            },
+            window.location.origin,
+          );
+        };
+        reader.onerror = () => {
+          status.textContent = "Could not read the pasted image.";
+        };
+        reader.readAsDataURL(file);
+        event.preventDefault();
+      });
+
+      window.parent.postMessage(
+        {
+          isStreamlitMessage: true,
+          type: "streamlit:componentReady",
+          apiVersion: 1,
+        },
+        window.location.origin,
+      );
+      window.parent.postMessage(
+        {
+          isStreamlitMessage: true,
+          type: "streamlit:setFrameHeight",
+          height: 120,
+        },
+        window.location.origin,
+      );
+    </script>
+  </body>
+</html>

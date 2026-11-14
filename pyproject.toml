@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medical-prescription-ocr"
+version = "0.1.0"
+description = "Medical Prescription OCR and Drug Interaction Checker"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Your Name", email = "you@example.com" }]
+keywords = ["ocr", "medical", "nlp", "fastapi", "streamlit"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "fastapi>=0.111,<1.0",
+    "uvicorn[standard]>=0.29",
+    "streamlit>=1.35",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+    "Pillow>=10.0",
+    "python-multipart>=0.0.9",
+    "paddlepaddle>=3.3.1,<3.4",
+    "paddleocr>=3.7,<3.8",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "httpx2>=2.16",
+    "anyio[trio]>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts   = "-v --tb=short"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*", "frontend*", "gemma_integration*"]
