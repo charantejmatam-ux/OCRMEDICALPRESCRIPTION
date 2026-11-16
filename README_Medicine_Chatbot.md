@@ -1,11 +1,6 @@
-# Medicine Information Chatbot (standalone page disabled)
+# Medicine Information Chatbot
 
-The standalone Streamlit page **Medicine Chatbot** is currently disabled and
-excluded from the web app's page navigation. Its previous implementation is
-retained, commented out, under `frontend/disabled/Medicine_Chatbot.py`.
-
-The medicine-chat backend remains available to other app features. When enabled,
-the chatbot searches official U.S.
+The optional Streamlit page **Medicine Chatbot** searches official U.S.
 DailyMed product labels and answers medicine questions using the selected
 label. Search always uses DailyMed; `GEMMA_API_KEY` does not change or improve
 the search itself. When the key is configured, Gemma's Google API generates

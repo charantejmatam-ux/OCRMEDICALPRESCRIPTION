@@ -89,6 +89,10 @@ st.set_page_config(
 )
 
 st.title("Medicine Prescription Search")
+st.sidebar.page_link(
+    "pages/1_Medicine_Chatbot.py",
+    label="💬 Medicine-only Chatbot",
+)
 
 if "clipboard_image_reset_id" not in st.session_state:
     st.session_state["clipboard_image_reset_id"] = 0
@@ -165,16 +169,13 @@ if st.button("Search medicines", type="primary", use_container_width=True):
                 del st.session_state[state_key]
         results: list[dict[str, Any]] = []
         for filename, image_bytes, mime_type in images:
-            with st.spinner(
-                f"Extracting text and identifying medicines from {filename}..."
-            ):
+            with st.spinner(f"Extracting medicine name from {filename}..."):
                 try:
                     response = requests.post(
                         f"{BACKEND_URL}/prescriptions/ocr",
                         files={"file": (filename, image_bytes, mime_type)},
                         data={"engine": "gemma"},
-                        # Allow two 600-second Gemma passes plus a response margin.
-                        timeout=1260,
+                        timeout=660,
                     )
                 except requests.RequestException as exc:
                     results.append(
@@ -252,13 +253,6 @@ for image_index, image_result in enumerate(
     if image_result.get("error"):
         st.error(image_result["error"])
         continue
-
-    raw_text = image_result.get("raw_text")
-    with st.expander("Extracted prescription text"):
-        if isinstance(raw_text, str) and raw_text.strip():
-            st.text(raw_text)
-        else:
-            st.info("Gemma did not return readable text for this image.")
 
     medicines = image_result.get("medicines", [])
     if not medicines:

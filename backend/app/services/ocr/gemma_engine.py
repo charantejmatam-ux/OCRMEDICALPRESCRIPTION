@@ -18,7 +18,7 @@ from backend.app.services.ocr.base import (
 
 
 class GemmaOCREngine(OCREngine):
-    """Transcribe prescription images, then identify medicines from the text."""
+    """Transcribe prescription images and extract medicine details with Gemma."""
 
     @property
     def name(self) -> str:
@@ -27,8 +27,9 @@ class GemmaOCREngine(OCREngine):
     @property
     def description(self) -> str:
         return (
-            "Gemma image transcription followed by text-only medicine extraction. "
-            "Uses the Gemma API when configured and falls back to local Ollama."
+            "Gemma image-to-JSON prescription extraction. Uses the Gemma API when "
+            "configured and falls back to local Ollama; image data is sent only to "
+            "the selected Gemma service."
         )
 
     def check_readiness(self) -> EngineReadiness:
@@ -114,8 +115,6 @@ class GemmaOCREngine(OCREngine):
             metadata={
                 "provider": provider,
                 "model": model,
-                "medicine_provider": result.get("medicine_provider"),
-                "medicine_model": result.get("medicine_model"),
                 "human_review_required": result["human_review_required"],
             },
         )

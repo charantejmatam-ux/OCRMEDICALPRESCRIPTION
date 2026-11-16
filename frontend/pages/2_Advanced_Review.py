@@ -37,8 +37,10 @@ from typing import Any
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from dotenv import dotenv_values
+from frontend.clipboard_image_component import (
+    CLIPBOARD_IMAGE_INPUT as _CLIPBOARD_IMAGE_INPUT,
+)
 
 PROJECT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 _dotenv_config = dotenv_values(PROJECT_ENV_FILE, interpolate=False)
@@ -54,10 +56,6 @@ DEFAULT_OCR_ENGINE: str = (
 del _dotenv_config
 
 MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024
-_CLIPBOARD_IMAGE_INPUT = components.declare_component(
-    "rx_clipboard_image_input",
-    path=Path(__file__).resolve().parents[1] / "components" / "clipboard_image",
-)
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -661,11 +659,12 @@ with col_right:
                         f"{BACKEND_URL}/prescriptions/ocr",
                         files=files,
                         data=data,
-                        # Allow two 600-second Gemma passes plus a response margin.
+                        # Keep the browser request open longer than the backend's
+                        # Gemini response timeout and Paddle cold-start path.
                         timeout=(
                             540
                             if include_gemini_second_opinion
-                            else 1260
+                            else 660
                             if selected_engine_key == "gemma"
                             else 240
                             if selected_engine_key == "gemini"
