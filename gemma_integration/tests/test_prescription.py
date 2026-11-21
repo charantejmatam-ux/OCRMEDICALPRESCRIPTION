@@ -25,6 +25,9 @@ EXPECTED = {
             "frequency": "three times daily",
             "duration": "7 days",
             "instructions": None,
+            "confidence": None,
+            "confidence_status": "Not available",
+            "confidence_source": None,
         }
     ],
     "medical_instructions": ["Take with food"],
@@ -105,7 +108,8 @@ def test_quota_or_server_error_falls_back_to_ollama_with_image(
     assert local_payload["options"] == {
         "temperature": 0.2,
         "repeat_penalty": 1.1,
-        "num_predict": 1024,
+        "num_predict": 2048,
+        "num_ctx": 4096,
     }
     assert len(base64.b64decode(local_payload["images"][0])) > 0
     assert len(post.call_args_list) == 2
@@ -202,3 +206,69 @@ def test_invalid_model_json_fails_explicitly(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(GemmaIntegrationError, match="invalid JSON"):
         process_prescription_image(_image_bytes(), _settings())
+
+
+def test_cloud_computes_exact_token_logprobs_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    json_text = json.dumps(EXPECTED)
+    # Reconstruct token sequence matching the JSON
+    prefix = '{"extracted_text": "Amoxicillin 500 mg\\nTake one capsule three times daily for 7 days", "medicines": [{"medicine_name": "'
+    suffix = '", "dosage": "500 mg", "frequency": "three times daily", "duration": "7 days", "instructions": null}], "medical_instructions": ["Take with food"]}'
+    tokens = [
+        {"token": prefix, "logProbability": 0.0},
+        {"token": "Amox", "logProbability": -0.02},
+        {"token": "icillin", "logProbability": -0.01},
+        {"token": suffix, "logProbability": 0.0},
+    ]
+    cloud_body = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": json_text}]},
+                "logprobsResult": {"chosenCandidates": tokens},
+            }
+        ]
+    }
+    post = Mock(return_value=_response(body=cloud_body))
+    monkeypatch.setattr("gemma_integration.prescription.requests.post", post)
+
+    result = process_prescription_image(_image_bytes(), _settings())
+    assert result["provider"] == "gemma_api"
+    med = result["medicines"][0]
+    assert med["medicine_name"] == "Amoxicillin"
+    assert med["confidence"] is not None
+    # exp((-0.02 + -0.01) / 2) * 100 = exp(-0.015) * 100 = 98.5%
+    assert med["confidence"] == 98.5
+    assert med["confidence_status"] == "Available"
+    assert med["confidence_source"] == "gemma_token_logprobs"
+
+
+def test_visual_clarity_fallback_when_logprobs_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ollama_output = {
+        "extracted_text": "Metformin 500mg",
+        "medicines": [
+            {
+                "medicine_name": "Metformin",
+                "dosage": "500 mg",
+                "frequency": None,
+                "duration": None,
+                "instructions": None,
+                "confidence": 92,
+            }
+        ],
+        "medical_instructions": [],
+    }
+    post = Mock(return_value=_response(body={"response": json.dumps(ollama_output)}))
+    monkeypatch.setattr("gemma_integration.prescription.requests.post", post)
+
+    result = process_prescription_image(_image_bytes(), _settings(api_key=None))
+    assert result["provider"] == "ollama"
+    med = result["medicines"][0]
+    assert med["medicine_name"] == "Metformin"
+    assert med["confidence"] == 92.0
+    assert med["confidence_status"] == "Available"
+    assert med["confidence_source"] == "gemma_visual_clarity"
+
+

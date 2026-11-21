@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,7 +25,8 @@ _PROMPT = """Read this prescription image and return only a JSON object with thi
       "dosage": "dose and unit, or null",
       "frequency": "frequency, or null",
       "duration": "duration, or null",
-      "instructions": "medicine-specific instructions, or null"
+      "instructions": "medicine-specific instructions, or null",
+      "confidence": "an integer from 0 to 100 representing visual certainty and legibility, or null if unclear"
     }
   ],
   "medical_instructions": ["other readable instructions"]
@@ -52,18 +55,35 @@ class GemmaSettings:
 
     @classmethod
     def from_env(cls) -> GemmaSettings:
+        try:
+            from dotenv import dotenv_values
+            project_env = Path(__file__).resolve().parents[1] / ".env"
+            env_file = dotenv_values(project_env, interpolate=False) if project_env.is_file() else {}
+        except Exception:
+            env_file = {}
+
+        raw_key = (
+            os.getenv("GEMMA_API_KEY")
+            or env_file.get("GEMMA_API_KEY")
+            or ""
+        )
+        api_key = raw_key.strip() if isinstance(raw_key, str) and raw_key.strip() else None
+
         return cls(
-            api_key=os.getenv("GEMMA_API_KEY") or None,
-            api_model=os.getenv("GEMMA_API_MODEL", "gemma-3-27b-it"),
-            api_base_url=os.getenv(
-                "GEMMA_API_BASE_URL",
-                "https://generativelanguage.googleapis.com/v1beta",
+            api_key=api_key,
+            api_model=os.getenv("GEMMA_API_MODEL") or env_file.get("GEMMA_API_MODEL") or "gemma-3-27b-it",
+            api_base_url=(
+                os.getenv("GEMMA_API_BASE_URL")
+                or env_file.get("GEMMA_API_BASE_URL")
+                or "https://generativelanguage.googleapis.com/v1beta"
             ).rstrip("/"),
-            ollama_base_url=os.getenv(
-                "OLLAMA_BASE_URL", "http://localhost:11434"
+            ollama_base_url=(
+                os.getenv("OLLAMA_BASE_URL")
+                or env_file.get("OLLAMA_BASE_URL")
+                or "http://localhost:11434"
             ).rstrip("/"),
-            ollama_model=os.getenv("OLLAMA_GEMMA_MODEL", "gemma3:4b"),
-            timeout_seconds=float(os.getenv("GEMMA_TIMEOUT_SECONDS", "600")),
+            ollama_model=os.getenv("OLLAMA_GEMMA_MODEL") or env_file.get("OLLAMA_GEMMA_MODEL") or "gemma3:4b",
+            timeout_seconds=float(os.getenv("GEMMA_TIMEOUT_SECONDS") or env_file.get("GEMMA_TIMEOUT_SECONDS") or "600"),
         )
 
 
@@ -100,7 +120,65 @@ def _image_as_png(image: bytes | bytearray | str | Path) -> bytes:
         raise ValueError("Input must be a valid, readable image.") from exc
 
 
-def _parse_result(response_text: str, provider: str, model: str) -> dict[str, Any]:
+def _extract_token_confidences(
+    response_text: str,
+    logprobs_result: dict[str, Any] | None,
+) -> list[float | None]:
+    if not isinstance(logprobs_result, dict):
+        return []
+
+    chosen_candidates = logprobs_result.get("chosenCandidates")
+    if not isinstance(chosen_candidates, list) or not chosen_candidates:
+        return []
+
+    cursor = 0
+    token_spans: list[tuple[int, int, float]] = []
+    for item in chosen_candidates:
+        if not isinstance(item, dict):
+            continue
+        tok = item.get("token")
+        logp = item.get("logProbability")
+        if not isinstance(tok, str) or not isinstance(logp, (int, float)):
+            continue
+        tok_len = len(tok)
+        token_spans.append((cursor, cursor + tok_len, float(logp)))
+        cursor += tok_len
+
+    if not token_spans:
+        return []
+
+    matches = list(re.finditer(r'"medicine_name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', response_text))
+    confidences: list[float | None] = []
+
+    for match in matches:
+        span_start, span_end = match.start(1), match.end(1)
+        if span_start == span_end:
+            confidences.append(None)
+            continue
+
+        matched_logps = [
+            logp for start, end, logp in token_spans
+            if start < span_end and end > span_start
+        ]
+
+        if not matched_logps:
+            confidences.append(None)
+            continue
+
+        mean_logp = sum(matched_logps) / len(matched_logps)
+        prob = math.exp(mean_logp) * 100.0
+        normalized = round(min(100.0, max(0.0, prob)), 1)
+        confidences.append(normalized)
+
+    return confidences
+
+
+def _parse_result(
+    response_text: str,
+    provider: str,
+    model: str,
+    logprobs_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     content = response_text.strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[-1]
@@ -136,8 +214,10 @@ def _parse_result(response_text: str, provider: str, model: str) -> dict[str, An
             f"{provider} response must include string-array 'medical_instructions'."
         )
 
-    normalized_medicines: list[dict[str, str | None]] = []
-    for medicine in medicines:
+    confidences = _extract_token_confidences(response_text, logprobs_result)
+
+    normalized_medicines: list[dict[str, Any]] = []
+    for idx, medicine in enumerate(medicines):
         if not isinstance(medicine, dict):
             raise GemmaIntegrationError(
                 f"{provider} returned a medicine entry that is not an object."
@@ -147,6 +227,23 @@ def _parse_result(response_text: str, provider: str, model: str) -> dict[str, An
             raise GemmaIntegrationError(
                 f"{provider} returned a non-string medicine name."
             )
+        conf = confidences[idx] if idx < len(confidences) else None
+        conf_source = "gemma_token_logprobs" if conf is not None else None
+
+        if conf is None:
+            raw_conf = medicine.get("confidence") or medicine.get("confidence_score")
+            if isinstance(raw_conf, (int, float)) and 0 <= raw_conf <= 100:
+                conf = round(float(raw_conf), 1)
+                conf_source = "gemma_visual_clarity"
+            elif isinstance(raw_conf, str):
+                try:
+                    parsed = float(raw_conf.rstrip("%").strip())
+                    if 0 <= parsed <= 100:
+                        conf = round(parsed, 1)
+                        conf_source = "gemma_visual_clarity"
+                except ValueError:
+                    pass
+
         normalized_medicines.append(
             {
                 "medicine_name": name,
@@ -154,6 +251,9 @@ def _parse_result(response_text: str, provider: str, model: str) -> dict[str, An
                 "frequency": _optional_text(medicine.get("frequency")),
                 "duration": _optional_text(medicine.get("duration")),
                 "instructions": _optional_text(medicine.get("instructions")),
+                "confidence": conf,
+                "confidence_status": "Available" if conf is not None else "Not available",
+                "confidence_source": conf_source,
             }
         )
 
@@ -197,7 +297,11 @@ def _extract_cloud(
                 ]
             }
         ],
-        "generationConfig": {"temperature": 0.1},
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseLogprobs": True,
+            "logprobs": 1,
+        },
     }
     try:
         response = requests.post(
@@ -220,12 +324,19 @@ def _extract_cloud(
 
     try:
         response_data = response.json()
-        response_text = response_data["candidates"][0]["content"]["parts"][0]["text"]
+        candidate = response_data["candidates"][0]
+        response_text = candidate["content"]["parts"][0]["text"]
+        logprobs_result = candidate.get("logprobsResult")
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise GemmaIntegrationError(
             "Gemma API response did not contain generated text."
         ) from exc
-    return _parse_result(response_text, "gemma_api", settings.api_model)
+    return _parse_result(
+        response_text,
+        "gemma_api",
+        settings.api_model,
+        logprobs_result=logprobs_result,
+    )
 
 
 def _extract_ollama(
@@ -241,7 +352,8 @@ def _extract_ollama(
         "options": {
             "temperature": 0.2,
             "repeat_penalty": 1.1,
-            "num_predict": 1024,
+            "num_predict": 2048,
+            "num_ctx": 4096,
         },
     }
     try:

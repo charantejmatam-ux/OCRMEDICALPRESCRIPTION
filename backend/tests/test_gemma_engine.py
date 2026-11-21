@@ -22,7 +22,7 @@ def _settings(api_key: str | None = None) -> GemmaSettings:
 
 def _image_bytes() -> bytes:
     output = io.BytesIO()
-    Image.new("RGB", (20, 12), "white").save(output, format="PNG")
+    Image.new("RGB", (20, 12), (230, 60, 40)).save(output, format="PNG")
     return output.getvalue()
 
 
@@ -114,9 +114,16 @@ def test_gemma_engine_runs_through_existing_image_ocr_endpoint(monkeypatch) -> N
         "model": "gemma3:4b",
         "human_review_required": True,
     }
+    received_pixels = []
+
+    def fake_process_prescription_image(image_bytes: bytes) -> dict:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            received_pixels.append(image.convert("RGB").getpixel((0, 0)))
+        return source_result
+
     monkeypatch.setattr(
         "backend.app.services.ocr.gemma_engine.process_prescription_image",
-        lambda _: source_result,
+        fake_process_prescription_image,
     )
     monkeypatch.setattr(
         GemmaOCREngine,
@@ -147,6 +154,7 @@ def test_gemma_engine_runs_through_existing_image_ocr_endpoint(monkeypatch) -> N
     assert result["raw_text"] == source_result["extracted_text"]
     assert result["structured_data"]["medicines"] == source_result["medicines"]
     assert result["metadata"]["provider"] == "ollama"
+    assert received_pixels == [(230, 60, 40)]
     extraction = response.json()["medicine_extraction"]
     assert extraction["metadata"]["source"] == "gemma_structured_output"
     medicine_candidates = [

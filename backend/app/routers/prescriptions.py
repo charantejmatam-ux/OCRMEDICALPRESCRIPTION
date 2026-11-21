@@ -354,7 +354,10 @@ async def run_ocr(
         )
 
     try:
-        preprocessed = image_processor.preprocess_for_ocr(img)
+        preprocessed = image_processor.preprocess_for_ocr(
+            img,
+            to_grayscale=selected_engine.name != "gemma",
+        )
         # CPU OCR and model initialization are blocking operations. Keep them
         # off the ASGI event loop so health/API requests remain responsive.
         extraction_result = await run_in_threadpool(
